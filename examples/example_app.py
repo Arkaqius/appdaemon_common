@@ -6,10 +6,11 @@ ExampleApp:
   module: example_app
   class: ExampleApp
   input_entity: sensor.some_temperature
-  output_entity: input_boolean.heating_needed
+  output_entity: switch.some_heater
   threshold: 23.5
   invert: false
   heartbeat_s: 600
+  mqtt_plugin: MQTT
 """
 
 from __future__ import annotations
@@ -25,6 +26,12 @@ from appdaemon_common import (
     init_step,
     safe_callback,
 )
+
+
+def validate_on_off_output(entity: str) -> None:
+    """Require a HA-owned controllable entity, not an AppDaemon-created state."""
+    if not entity.startswith(("switch.", "light.")):
+        raise ValueError("output_entity must be a HA-owned switch.* or light.* entity")
 
 
 class ExampleApp(HealthAppBase):
@@ -44,7 +51,7 @@ class ExampleApp(HealthAppBase):
         schema = ConfigSchema(
             fields=[
                 Field("input_entity", str, required=True),
-                Field("output_entity", str, required=True),
+                Field("output_entity", str, required=True, validator=validate_on_off_output),
                 Field("threshold", float, default=23.0),
                 Field("invert", bool, default=False),
                 Field("heartbeat_s", int, default=600),
@@ -55,9 +62,7 @@ class ExampleApp(HealthAppBase):
 
     @init_step("entities")
     def init_entities(self) -> None:
-        """Initialize output entity and internal state."""
-        # Initialize output entity to a known state
-        self.set_state(self.cfg["output_entity"], state="unknown")
+        """Initialize internal runtime state."""
         self._last_value: float | None = None
 
     @init_step("listeners")
@@ -96,14 +101,10 @@ class ExampleApp(HealthAppBase):
 
     def _set_output_state(self, on: bool) -> None:
         entity = self.cfg["output_entity"]
-        # Use turn_on/turn_off for common domains; otherwise, set_state.
-        if entity.startswith(("switch.", "input_boolean.", "light.")):
-            if on:
-                self.turn_on(entity)
-            else:
-                self.turn_off(entity)
+        if on:
+            self.turn_on(entity)
         else:
-            self.set_state(entity, state="on" if on else "off")
+            self.turn_off(entity)
 
     def heartbeat_message(self) -> str | None:
         """Append the last input value to the heartbeat log line."""
